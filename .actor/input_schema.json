@@ -23,12 +23,6 @@
       "description": "Location, e.g., 'Sydney NSW', 'Melbourne VIC'. Leave empty for Australia-wide results.",
       "editor": "textfield"
     },
-    "category": {
-      "title": "Category (optional)",
-      "type": "string",
-      "description": "Optional job category to filter by (currently not supported in Careerone URLs).",
-      "editor": "textfield"
-    },
     "collectDetails": {
       "title": "Collect job details",
       "type": "boolean",

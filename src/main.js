@@ -55,6 +55,8 @@ async function main() {
         if (startUrl) initial.push(startUrl);
         if (url) initial.push(url);
         if (!initial.length) initial.push(buildStartUrl(keyword, location));
+        
+        log.info(`Starting URLs: ${JSON.stringify(initial)}`);
 
         const proxyConf = proxyConfiguration ? await Actor.createProxyConfiguration({ ...proxyConfiguration }) : undefined;
 
@@ -117,22 +119,47 @@ async function main() {
                 timeout: { request: 45000 },
                 throwHttpErrors: false,
             });
+            log.info(`Fetched ${url} - Status: ${res.statusCode}, Body length: ${res.body?.length || 0}`);
             return res.body || '';
         }
 
         function parseNuxtState(html) {
             const match = html.match(/window.__NUXT__=(.*?);<\/script>/s);
-            if (!match) return null;
+            if (!match) {
+                log.warning('No __NUXT__ state found in HTML');
+                return null;
+            }
             try {
-                return vm.runInNewContext(match[1], {});
-            } catch {
+                const state = vm.runInNewContext(match[1], {});
+                log.info(`Parsed Nuxt state successfully`);
+                return state;
+            } catch (err) {
+                log.error(`Failed to parse Nuxt state: ${err.message}`);
                 return null;
             }
         }
 
         function extractJobsFromState(state) {
-            const jobs = state?.state?.search?.searchPayload?.search_results?.jobs || state?.state?.searchPayload?.search_results?.jobs || [];
-            const meta = state?.state?.search?.searchPayload?.search_results?.meta || state?.state?.searchPayload?.search_results?.meta || {};
+            if (!state) {
+                log.warning('State is null/undefined');
+                return { jobs: [], meta: {} };
+            }
+            
+            // Try multiple paths to find jobs
+            const jobs = state?.state?.search?.searchPayload?.search_results?.jobs 
+                || state?.state?.searchPayload?.search_results?.jobs 
+                || state?.data?.search?.searchPayload?.search_results?.jobs
+                || state?.search?.searchPayload?.search_results?.jobs
+                || [];
+            
+            const meta = state?.state?.search?.searchPayload?.search_results?.meta 
+                || state?.state?.searchPayload?.search_results?.meta 
+                || state?.data?.search?.searchPayload?.search_results?.meta
+                || state?.search?.searchPayload?.search_results?.meta
+                || {};
+            
+            log.info(`Extracted ${jobs.length} jobs from state. Meta: ${JSON.stringify(meta).substring(0, 200)}`);
+            
             if (!Array.isArray(jobs) || !jobs.length) return { jobs: [], meta: {} };
             return { jobs, meta };
         }
@@ -145,6 +172,7 @@ async function main() {
                 const abs = href ? toAbs(href, base) : null;
                 if (abs) links.add(abs);
             });
+            log.info(`Extracted ${links.size} job links from HTML`);
             return [...links];
         }
 
@@ -178,9 +206,11 @@ async function main() {
         }
 
         for (const start of initial) {
+            log.info(`Starting scrape from: ${start}`);
             let pageNo = 1;
             let nextUrl = start;
             while (saved < RESULTS_WANTED && pageNo <= MAX_PAGES && nextUrl) {
+                log.info(`Processing page ${pageNo}: ${nextUrl}`);
                 const html = await fetchHtml(nextUrl);
                 const state = parseNuxtState(html);
                 const { jobs, meta } = extractJobsFromState(state);
@@ -198,6 +228,7 @@ async function main() {
                 const remaining = RESULTS_WANTED - saved;
                 const toProcess = normalizedJobs.slice(0, Math.max(0, remaining)).filter(j => j.url && !seenUrls.has(j.url));
                 toProcess.forEach(j => seenUrls.add(j.url));
+                log.info(`Will process ${toProcess.length} jobs (${remaining} remaining to reach target)`);
 
                 for (const job of toProcess) {
                     if (saved >= RESULTS_WANTED) break;
@@ -236,17 +267,28 @@ async function main() {
                     }
                 }
 
-                if (saved >= RESULTS_WANTED) break;
+                if (saved >= RESULTS_WANTED) {
+                    log.info('Reached target results count');
+                    break;
+                }
                 const totalPages = meta?.total_pages || meta?.totalPages || meta?.total_pages_count;
                 const currentPage = meta?.page || pageNo;
-                if (totalPages && currentPage >= totalPages) break;
+                if (totalPages && currentPage >= totalPages) {
+                    log.info(`Reached last page (${currentPage}/${totalPages})`);
+                    break;
+                }
                 const nextPage = currentPage + 1;
-                if (nextPage > MAX_PAGES) break;
+                if (nextPage > MAX_PAGES) {
+                    log.info(`Reached max pages limit (${MAX_PAGES})`);
+                    break;
+                }
                 const u = new URL(nextUrl);
                 u.searchParams.set('page', String(nextPage));
                 nextUrl = u.href;
                 pageNo = nextPage;
+                log.info(`Moving to next page: ${nextUrl}`);
             }
+            log.info(`Finished processing start URL: ${start}`);
         }
 
         log.info(`Finished. Saved ${saved} items`);
