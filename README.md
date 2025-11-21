@@ -1,11 +1,11 @@
 # Careerone Jobs Scraper
 
-This Apify actor scrapes job listings from Careerone.com.au using Crawlee's CheerioCrawler and gotScraping.
+This Apify actor scrapes job listings from Careerone.com.au using Crawlee's PlaywrightCrawler with a real browser.
 
 ## Features
 
-- Scrapes Careerone.com.au search results and job detail pages (no browser required).
-- Prefers structured data (JSON-LD) where available, falls back to HTML parsing.
+- Scrapes Careerone.com.au search results and job detail pages using Playwright for JavaScript-rendered content.
+- Handles dynamic content and waits for elements to load properly.
 - Handles pagination until the requested number of results is reached.
 - Optional detail scraping mode to fetch full job descriptions.
 - Saves results to an Apify dataset using a consistent schema.
@@ -43,6 +43,7 @@ Each item saved to the dataset follows this structure:
 
 ## Notes
 
-- The actor uses CheerioCrawler with gotScraping; no additional local packages are required beyond those in package.json.
+- The actor uses PlaywrightCrawler with Chromium browser for reliable scraping of JavaScript-rendered content.
 - On Apify platform, provide `proxyConfiguration` and reasonable `results_wanted` to avoid rate limits.
 - If Careerone.com.au changes their markup, selectors in `src/main.js` may need small updates.
+- Uses headless Chrome by default for efficiency.
