@@ -81,7 +81,7 @@
       "editor": "checkbox",
       "default": true
   }
-}
+},
   "required": [],
   "additionalProperties": false
 }
