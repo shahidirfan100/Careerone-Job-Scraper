@@ -112,13 +112,13 @@ async function main() {
             },
             autoscaledPoolOptions: {
                 minConcurrency: 1,
-                desiredConcurrency: 4,
-                scaleUpStepRatio: 0.5,
+                desiredConcurrency: 6,
+                scaleUpStepRatio: 0.7,
                 scaleDownStepRatio: 0.25,
             },
             maxRequestRetries: 5,
             requestHandlerTimeoutSecs: 90,
-            maxConcurrency: 8,
+            maxConcurrency: 10,
             navigationTimeoutSecs: 60,
             preNavigationHooks: [
                 async ({ page, request, session }) => {
@@ -228,6 +228,23 @@ async function main() {
 
                     if (label === 'LIST') {
                         stats.listPages++;
+
+                        // Scroll to trigger lazy-loaded listings
+                        await page.evaluate(async () => {
+                            await new Promise((resolve) => {
+                                const distance = 600;
+                                let scrolled = 0;
+                                const timer = setInterval(() => {
+                                    window.scrollBy(0, distance);
+                                    scrolled += distance;
+                                    if (scrolled > document.body.scrollHeight * 1.2) {
+                                        clearInterval(timer);
+                                        resolve();
+                                    }
+                                }, 120);
+                            });
+                        });
+                        await sleep(800);
                         
                         // Wait for job listings with multiple selectors
                         const selectors = [
