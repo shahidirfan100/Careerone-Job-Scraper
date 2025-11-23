@@ -14,6 +14,9 @@ const USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13.5; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:129.0) Gecko/20100101 Firefox/129.0',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
 ];
 
@@ -43,6 +46,9 @@ async function main() {
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 10;
 
+        // Configure log verbosity: debugMode -> DEBUG, otherwise INFO
+        log.setLevel(debugMode ? log.LEVELS.DEBUG : log.LEVELS.INFO);
+
         log.info('🚀 Starting Careerone Jobs Scraper', {
             keyword,
             location,
@@ -59,34 +65,69 @@ async function main() {
                 locationSlug = String(loc)
                     .trim()
                     .toLowerCase()
-                    .replace(/[^a-z0-9\s-]/g, '')
-                    .replace(/\s+/g, '-');
+                    .replace(/\s+,\s+/, ' ')
+                    .replace(/\s+/g, '-')
+                    .replace(/[^a-z0-9-]/g, '');
             }
-            const baseUrl = `https://www.careerone.com.au/jobs/in-${locationSlug}`;
-            const urlObj = new URL(baseUrl);
-            if (kw) urlObj.searchParams.set('keywords', String(kw).trim());
-            return urlObj.href;
+
+            let baseUrl = `https://www.careerone.com.au/jobs/in-${locationSlug}`;
+            const params = new URLSearchParams();
+
+            if (kw) {
+                params.set('keywords', kw.trim());
+            }
+
+            if (category) {
+                params.set('category', String(category).trim());
+            }
+
+            const queryString = params.toString();
+            if (queryString) baseUrl += `?${queryString}`;
+
+            return baseUrl;
         };
 
-        // Prepare initial URLs
-        const initial = [];
-        if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
-        if (startUrl) initial.push(startUrl);
-        if (url) initial.push(url);
-        if (!initial.length) initial.push(buildStartUrl(keyword, location));
+        let initialUrls = [];
 
-        log.info('📍 Initial URLs prepared:', { urls: initial });
+        // 1) Start URLs precedence: url > startUrl > startUrls > built from keyword/location
+        if (url && typeof url === 'string') {
+            initialUrls.push(url);
+        } else if (startUrl && typeof startUrl === 'string') {
+            initialUrls.push(startUrl);
+        } else if (Array.isArray(startUrls) && startUrls.length > 0) {
+            initialUrls = startUrls
+                .filter((u) => typeof u === 'string' && u.trim())
+                .map((u) => u.trim());
+        } else {
+            // Fallback: build URL from keyword + location
+            const builtUrl = buildStartUrl(keyword, location);
+            initialUrls.push(builtUrl);
+        }
 
-        // Setup proxy configuration
-        const proxyConf = proxyConfiguration
-            ? await Actor.createProxyConfiguration({ ...proxyConfiguration })
-            : undefined;
+        // Deduplicate URLs
+        initialUrls = [...new Set(initialUrls)];
+
+        if (initialUrls.length === 0) {
+            throw new Error('No valid start URLs were provided or could be constructed.');
+        }
+
+        log.info('📍 Initial URLs prepared:', { urls: initialUrls });
+
+        // Configure proxy
+        let proxyConf;
+        if (proxyConfiguration) {
+            proxyConf = await Actor.createProxyConfiguration(proxyConfiguration);
+        } else {
+            proxyConf = await Actor.createProxyConfiguration({});
+        }
 
         if (proxyConf) {
             log.info('🔐 Proxy configuration enabled');
+        } else {
+            log.warning('⚠️ No proxy configuration available, you may be blocked quickly.');
         }
 
-        // Tracking variables
+        // Global statistics
         let saved = 0;
         let failed = 0;
         const seenUrls = new Set();
@@ -101,10 +142,11 @@ async function main() {
             proxyConfiguration: proxyConf,
             useSessionPool: true,
             sessionPoolOptions: {
-                maxPoolSize: 60,
-                sessionOptions: { maxUsageCount: 6 },
+                maxPoolSize: 30,
+                sessionOptions: { maxUsageCount: 4 },
             },
-            errorHandler({ error, session, log: crawlerLog }) {
+            errorHandler(context, error) {
+                const { session, log: crawlerLog } = context;
                 if (session && /403|429|blocked/i.test(error?.message || '')) {
                     crawlerLog.warning('?? Retiring session due to block error');
                     session.retire();
@@ -112,14 +154,14 @@ async function main() {
             },
             autoscaledPoolOptions: {
                 minConcurrency: 1,
-                desiredConcurrency: 6,
+                desiredConcurrency: 4,
                 scaleUpStepRatio: 0.7,
                 scaleDownStepRatio: 0.25,
             },
-            maxRequestRetries: 5,
-            requestHandlerTimeoutSecs: 90,
-            maxConcurrency: 10,
-            navigationTimeoutSecs: 60,
+            maxRequestRetries: 4,
+            requestHandlerTimeoutSecs: 45,
+            maxConcurrency: 6,
+            navigationTimeoutSecs: 25,
             preNavigationHooks: [
                 async ({ page, request, session }) => {
                     // Set up page before navigation to avoid detection
@@ -133,6 +175,7 @@ async function main() {
                         'DNT': '1',
                         'Connection': 'keep-alive',
                         'Upgrade-Insecure-Requests': '1',
+                        'Referer': 'https://www.careerone.com.au/',
                         'Sec-Fetch-Dest': 'document',
                         'Sec-Fetch-Mode': 'navigate',
                         'Sec-Fetch-Site': 'none',
@@ -146,13 +189,21 @@ async function main() {
                         Object.defineProperty(navigator, 'webdriver', {
                             get: () => false,
                         });
-                        
-                        // Mock chrome object
-                        window.chrome = {
-                            runtime: {},
-                        };
-                        
-                        // Mock permissions
+                    });
+
+                    // More stealth: mock languages, plugins, etc.
+                    await page.evaluateOnNewDocument(() => {
+                        Object.defineProperty(navigator, 'languages', {
+                            get: () => ['en-US', 'en'],
+                        });
+
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3],
+                        });
+                    });
+
+                    // Prevent detection via permissions
+                    await page.evaluateOnNewDocument(() => {
                         const originalQuery = window.navigator.permissions.query;
                         window.navigator.permissions.query = (parameters) => (
                             parameters.name === 'notifications' ?
@@ -200,14 +251,8 @@ async function main() {
                         '--safebrowsing-disable-auto-update',
                         // Memory optimizations
                         '--disable-dev-shm-usage',
-                        '--disk-cache-size=0',
                     ],
-                    defaultViewport: {
-                        width: 1366,
-                        height: 768,
-                    },
                 },
-                useChrome: false,
             },
 
             async requestHandler({ request, page, enqueueLinks, log: crawlerLog, session, response }) {
@@ -215,7 +260,14 @@ async function main() {
                 const pageNo = request.userData?.pageNo || 1;
                 const requestStart = Date.now();
 
-                crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
+                if (debugMode || label === 'LIST') {
+                    crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
+                }
+
+                if (label === 'LIST' && saved >= RESULTS_WANTED) {
+                    crawlerLog.info(`🎯 Target already reached (${saved}/${RESULTS_WANTED}), skipping list page.`);
+                    return;
+                }
 
                 try {
                     // If we land on a block page, retire the session and retry
@@ -229,50 +281,15 @@ async function main() {
                     if (label === 'LIST') {
                         stats.listPages++;
 
-                        // Scroll to trigger lazy-loaded listings
-                        await page.evaluate(async () => {
-                            await new Promise((resolve) => {
-                                const distance = 600;
-                                let scrolled = 0;
-                                const timer = setInterval(() => {
-                                    window.scrollBy(0, distance);
-                                    scrolled += distance;
-                                    if (scrolled > document.body.scrollHeight * 1.2) {
-                                        clearInterval(timer);
-                                        resolve();
-                                    }
-                                }, 120);
-                            });
-                        });
-                        await sleep(800);
-                        
-                        // Wait for job listings with multiple selectors
-                        const selectors = [
-                            'a[href*="/jobview/"]',
-                            'article a[href*="/jobview/"]',
-                            '[data-testid="job-card"] a',
-                        ];
-                        
-                        let jobsFound = false;
-                        for (const selector of selectors) {
-                            try {
-                                await page.waitForSelector(selector, { timeout: 10000 });
-                                jobsFound = true;
-                                crawlerLog.info(`✅ Jobs found using selector: ${selector}`);
-                                break;
-                            } catch (err) {
-                                crawlerLog.warning(`⚠️ Selector failed: ${selector}`);
-                            }
-                        }
+                        // Ensure page load
+                        await page.waitForTimeout(1200);
 
-                        if (!jobsFound) {
-                            crawlerLog.warning(`❌ No job listings found on page ${pageNo}`);
-                            
-                            if (debugMode) {
-                                const screenshot = await page.screenshot({ fullPage: true });
-                                await Actor.setValue(`debug-screenshot-page-${pageNo}.png`, screenshot, { contentType: 'image/png' });
-                            }
-                            return;
+                        // Basic heuristic to detect "blocked" content (captcha, "access denied")
+                        const bodyText = await page.evaluate(() => document.body.innerText || '');
+                        if (/access denied|forbidden|unusual traffic|captcha/i.test(bodyText)) {
+                            crawlerLog.warning('⚠️ Possible block page detected by content, retiring session');
+                            session?.retire();
+                            throw new Error('Blocked by page content');
                         }
 
                         // Small delay for dynamic content to load
@@ -299,6 +316,10 @@ async function main() {
 
                         if (jobLinks.length === 0) {
                             crawlerLog.warning('⚠️ No job links extracted, possible page structure change');
+                            if (debugMode) {
+                                const screenshot = await page.screenshot({ fullPage: true });
+                                await Actor.setValue(`debug-screenshot-empty-list-page-${pageNo}.png`, screenshot, { contentType: 'image/png' });
+                            }
                             return;
                         }
 
@@ -342,29 +363,52 @@ async function main() {
 
                         // Handle pagination
                         if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
-                            // Try to find next page button
-                            const hasNextPage = await page.evaluate(() => {
-                                // Look for "NEXT" button or pagination
-                                const nextButton = 
-                                    document.querySelector('a[rel="next"]') ||
-                                    document.querySelector('button[aria-label="Next"]') ||
+                            // Try to read the actual "next page" href from the DOM
+                            const nextPageHref = await page.evaluate(() => {
+                                const candidates = [
+                                    document.querySelector('a[rel="next"]'),
+                                    document.querySelector('button[aria-label="Next"]'),
                                     Array.from(document.querySelectorAll('a')).find(
-                                        (a) => /next|›|»/i.test(a.textContent)
-                                    );
-                                return !!nextButton;
+                                        (a) => /next|›|»/i.test((a.textContent || '').trim())
+                                    ),
+                                ].filter(Boolean);
+
+                                const link = candidates[0];
+
+                                // If it's an <a>, use its href; if it's only a button with JS handler, return null
+                                if (!link) return null;
+                                if (link.tagName.toLowerCase() === 'a' && link.href) {
+                                    return link.href;
+                                }
+
+                                return null;
                             });
 
-                            if (hasNextPage) {
-                                const nextPageUrl = new URL(request.url);
-                                nextPageUrl.searchParams.set('page', String(pageNo + 1));
-
+                            if (nextPageHref) {
                                 await enqueueLinks({
-                                    urls: [nextPageUrl.href],
+                                    urls: [nextPageHref],
                                     userData: { label: 'LIST', pageNo: pageNo + 1 },
                                 });
-                                crawlerLog.info(`📄 Enqueued next page: ${pageNo + 1}`);
+                                crawlerLog.info(`📄 Enqueued next page via href: ${nextPageHref}`);
                             } else {
-                                crawlerLog.info(`🏁 No more pages available after page ${pageNo}`);
+                                // Fallback: conservative ?page= pagination if site supports it
+                                try {
+                                    const urlObj = new URL(request.url);
+                                    urlObj.searchParams.set('page', String(pageNo + 1));
+                                    const fallbackUrl = urlObj.href;
+
+                                    if (fallbackUrl !== request.url) {
+                                        await enqueueLinks({
+                                            urls: [fallbackUrl],
+                                            userData: { label: 'LIST', pageNo: pageNo + 1 },
+                                        });
+                                        crawlerLog.info(`📄 Enqueued next page via fallback URL: ${fallbackUrl}`);
+                                    } else {
+                                        crawlerLog.info(`🏁 No more pages available after page ${pageNo}`);
+                                    }
+                                } catch {
+                                    crawlerLog.info(`🏁 No more pages available after page ${pageNo}`);
+                                }
                             }
                         } else if (saved >= RESULTS_WANTED) {
                             crawlerLog.info(`🎯 Reached target: ${saved} jobs`);
@@ -379,6 +423,10 @@ async function main() {
                             return;
                         }
 
+                        // Gentle throttling for detail pages to keep requests "one by one"
+                        const jitter = 400 + Math.floor(Math.random() * 500);
+                        await sleep(jitter);
+
                         stats.detailPages++;
 
                         // Wait for main content
@@ -387,6 +435,14 @@ async function main() {
                         } catch (err) {
                             crawlerLog.warning('⚠️ H1 not found, trying alternative wait');
                             await sleep(1200);
+                        }
+
+                        // Additional content-based block detection
+                        const detailBody = await page.evaluate(() => document.body.innerText || '');
+                        if (/access denied|forbidden|unusual traffic|captcha/i.test(detailBody)) {
+                            crawlerLog.warning('⚠️ Block detected on detail page, retiring session');
+                            session?.retire();
+                            throw new Error('Blocked detail page');
                         }
 
                         // Extract job details with multiple fallbacks
@@ -508,10 +564,13 @@ async function main() {
                         }
 
                         const item = {
+                            site: 'Careerone',
+                            keyword: keyword || null,
+                            location: location || null,
+                            category: category || null,
                             title: jobData.title,
                             company: jobData.company,
-                            category: category || null,
-                            location: jobData.location,
+                            location_text: jobData.location,
                             salary: jobData.salary,
                             date_posted: jobData.datePosted,
                             description_html: jobData.descriptionHtml,
@@ -530,7 +589,9 @@ async function main() {
                     }
 
                     const requestTime = Date.now() - requestStart;
-                    crawlerLog.info(`⏱️ Request completed in ${requestTime}ms`);
+                    if (debugMode) {
+                        crawlerLog.debug(`⏱️ Request completed in ${requestTime}ms`);
+                    }
                     
                 } catch (error) {
                     failed++;
@@ -542,14 +603,16 @@ async function main() {
                     });
                     crawlerLog.error(`❌ Error processing ${label}: ${error.message}`, {
                         url: request.url,
-                        stack: error.stack,
+                        label,
+                        pageNo,
                     });
 
+                    // Capture screenshot of error in debug mode
                     if (debugMode) {
                         try {
-                            const screenshot = await page.screenshot();
+                            const screenshot = await page.screenshot({ fullPage: true });
                             await Actor.setValue(
-                                `error-screenshot-${Date.now()}.png`,
+                                `error-${label.toLowerCase()}-page-${pageNo}-${Date.now()}.png`,
                                 screenshot,
                                 { contentType: 'image/png' }
                             );
@@ -560,15 +623,16 @@ async function main() {
                 }
             },
 
-            failedRequestHandler({ request, error }, err) {
+            failedRequestHandler({ request, log: crawlerLog }, error) {
                 failed++;
-                log.error(`❌ Request failed after retries: ${request.url}`, {
-                    error: error || err?.message,
+                const message = error?.message || String(error || '');
+                crawlerLog.error(`❌ Request failed after retries: ${request.url}`, {
+                    error: message,
                     userData: request.userData,
                 });
                 stats.errors.push({
                     url: request.url,
-                    error: (error || err)?.message,
+                    error: message,
                     type: 'failed_after_retries',
                 });
             },
@@ -576,20 +640,17 @@ async function main() {
 
         // Run the crawler
         await crawler.run(
-            initial.map((u) => ({
+            initialUrls.map((u) => ({
                 url: u,
                 userData: { label: 'LIST', pageNo: 1 },
             }))
         );
 
-        // Final statistics
-        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-        
+        const duration = (Date.now() - startTime) / 1000;
         log.info('🏁 Scraping completed!', {
-            duration: `${duration}s`,
+            duration_seconds: duration.toFixed(1),
             saved,
             failed,
-            success_rate: `${((saved / (saved + failed)) * 100).toFixed(1)}%`,
             list_pages: stats.listPages,
             detail_pages: stats.detailPages,
         });
