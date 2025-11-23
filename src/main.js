@@ -90,7 +90,7 @@ async function main() {
 
         let initialUrls = [];
 
-        // 1) Start URLs precedence: url > startUrl > startUrls > built from keyword/location
+        // Start URLs precedence: url > startUrl > startUrls > built from keyword/location
         if (url && typeof url === 'string') {
             initialUrls.push(url);
         } else if (startUrl && typeof startUrl === 'string') {
@@ -100,7 +100,6 @@ async function main() {
                 .filter((u) => typeof u === 'string' && u.trim())
                 .map((u) => u.trim());
         } else {
-            // Fallback: build URL from keyword + location
             const builtUrl = buildStartUrl(keyword, location);
             initialUrls.push(builtUrl);
         }
@@ -114,21 +113,16 @@ async function main() {
 
         log.info('📍 Initial URLs prepared:', { urls: initialUrls });
 
-        // Configure proxy
-        let proxyConf;
-        if (proxyConfiguration) {
-            proxyConf = await Actor.createProxyConfiguration(proxyConfiguration);
-        } else {
-            proxyConf = await Actor.createProxyConfiguration({});
-        }
+        // Setup proxy configuration
+        const proxyConf = proxyConfiguration
+            ? await Actor.createProxyConfiguration({ ...proxyConfiguration })
+            : undefined;
 
         if (proxyConf) {
             log.info('🔐 Proxy configuration enabled');
-        } else {
-            log.warning('⚠️ No proxy configuration available, you may be blocked quickly.');
         }
 
-        // Global statistics
+        // Tracking variables
         let saved = 0;
         let failed = 0;
         const seenUrls = new Set();
@@ -146,6 +140,7 @@ async function main() {
                 maxPoolSize: 30,
                 sessionOptions: { maxUsageCount: 4 },
             },
+            // FIXED: new Crawlee v3 signature (context, error)
             errorHandler(context, error) {
                 const { session, log: crawlerLog } = context;
                 if (session && /403|429|blocked/i.test(error?.message || '')) {
@@ -155,73 +150,22 @@ async function main() {
             },
             autoscaledPoolOptions: {
                 minConcurrency: 1,
-                desiredConcurrency: 4,
+                desiredConcurrency: 2,
                 scaleUpStepRatio: 0.7,
                 scaleDownStepRatio: 0.25,
             },
-            maxRequestRetries: 4,
-            requestHandlerTimeoutSecs: 45,
-            maxConcurrency: 6,
-            navigationTimeoutSecs: 25,
+            maxRequestRetries: 5,
+            requestHandlerTimeoutSecs: 60,
+            maxConcurrency: 3,
+            navigationTimeoutSecs: 60,
             preNavigationHooks: [
                 async ({ page, session }) => {
-                    // Set up page before navigation to avoid detection
+                    // Basic, browser-like setup; rely on puppeteer-extra-stealth for most evasion.
                     if (!session.userData.ua) session.userData.ua = pickUserAgent();
                     await page.setUserAgent(session.userData.ua);
 
                     await page.setExtraHTTPHeaders({
                         'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                        'DNT': '1',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Referer': 'https://www.careerone.com.au/',
-                        'Sec-Fetch-Dest': 'document',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'Sec-Fetch-Site': 'none',
-                        'Sec-Fetch-User': '?1',
-                        'Pragma': 'no-cache',
-                        'Cache-Control': 'no-cache',
-                    });
-
-                    // Additional stealth: hide webdriver property
-                    await page.evaluateOnNewDocument(() => {
-                        Object.defineProperty(navigator, 'webdriver', {
-                            get: () => false,
-                        });
-                    });
-
-                    // More stealth: mock languages, plugins, etc.
-                    await page.evaluateOnNewDocument(() => {
-                        Object.defineProperty(navigator, 'languages', {
-                            get: () => ['en-US', 'en'],
-                        });
-
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [1, 2, 3],
-                        });
-                    });
-
-                    // Prevent detection via permissions
-                    await page.evaluateOnNewDocument(() => {
-                        const originalQuery = window.navigator.permissions.query;
-                        window.navigator.permissions.query = (parameters) => (
-                            parameters.name === 'notifications'
-                                ? Promise.resolve({ state: Notification.permission })
-                                : originalQuery(parameters)
-                        );
-                    });
-
-                    // Block unnecessary resources for speed
-                    await page.setRequestInterception(true);
-                    page.on('request', (req) => {
-                        const resourceType = req.resourceType();
-                        // Block heavy assets while keeping layout-critical resources
-                        if (['image', 'font', 'media'].includes(resourceType)) {
-                            req.abort();
-                        } else {
-                            req.continue();
-                        }
                     });
                 },
             ],
@@ -260,9 +204,7 @@ async function main() {
                 const pageNo = request.userData?.pageNo || 1;
                 const requestStart = Date.now();
 
-                if (debugMode || label === 'LIST') {
-                    crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
-                }
+                crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
 
                 if (label === 'LIST' && saved >= RESULTS_WANTED) {
                     crawlerLog.info(`🎯 Target already reached (${saved}/${RESULTS_WANTED}), skipping list page.`);
@@ -281,18 +223,50 @@ async function main() {
                     if (label === 'LIST') {
                         stats.listPages++;
 
-                        // Small delay to allow page to paint
-                        await sleep(1200);
+                        // Scroll to trigger lazy-loaded listings
+                        await page.evaluate(async () => {
+                            await new Promise((resolve) => {
+                                const distance = 600;
+                                let scrolled = 0;
 
-                        // Basic heuristic to detect "blocked" content (captcha, "access denied")
-                        const bodyText = await page.evaluate(() => document.body.innerText || '');
-                        if (/access denied|forbidden|unusual traffic|captcha/i.test(bodyText)) {
-                            crawlerLog.warning('⚠️ Possible block page detected by content, retiring session');
-                            session?.retire();
-                            throw new Error('Blocked by page content');
+                                const scrollDown = () => {
+                                    const height = document.body.scrollHeight;
+                                    window.scrollBy(0, distance);
+                                    scrolled += distance;
+
+                                    if (scrolled < height * 0.7) {
+                                        setTimeout(scrollDown, 120);
+                                    } else {
+                                        resolve();
+                                    }
+                                };
+
+                                scrollDown();
+                            });
+                        });
+                        await sleep(800);
+
+                        // Wait for job listings with multiple selectors
+                        const selectors = [
+                            'a[href*="/jobview/"]',
+                            'article a[href*="/jobview/"]',
+                            '[data-testid="job-list-item"] a[href*="/jobview/"]',
+                        ];
+
+                        let foundSelector = null;
+                        for (const sel of selectors) {
+                            const exists = await page.$(sel);
+                            if (exists) {
+                                foundSelector = sel;
+                                break;
+                            }
                         }
 
-                        // Extra delay for dynamic content
+                        if (!foundSelector) {
+                            crawlerLog.warning('⚠️ No job link selectors found in LIST page');
+                        }
+
+                        // Small delay for dynamic content to load
                         await sleep(1000);
 
                         // Extract job links with deduplication
@@ -303,7 +277,6 @@ async function main() {
                             links.forEach((link) => {
                                 const href = link.href;
                                 if (href && href.includes('/jobview/')) {
-                                    // Clean URL by removing query params
                                     const cleanUrl = href.split('?')[0];
                                     uniqueLinks.add(cleanUrl);
                                 }
@@ -319,7 +292,11 @@ async function main() {
                             if (debugMode) {
                                 try {
                                     const screenshot = await page.screenshot({ fullPage: true });
-                                    await Actor.setValue(`debug-screenshot-empty-list-page-${pageNo}.png`, screenshot, { contentType: 'image/png' });
+                                    await Actor.setValue(
+                                        `debug-screenshot-empty-list-page-${pageNo}.png`,
+                                        screenshot,
+                                        { contentType: 'image/png' },
+                                    );
                                 } catch {
                                     // ignore screenshot errors
                                 }
@@ -365,26 +342,21 @@ async function main() {
                             }
                         }
 
-                        // Handle pagination
+                        // Pagination: only go next if we still need more jobs and under MAX_PAGES
                         if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
-                            // Try to read the actual "next page" href from the DOM
                             const nextPageHref = await page.evaluate(() => {
                                 const candidates = [
                                     document.querySelector('a[rel="next"]'),
-                                    document.querySelector('button[aria-label="Next"]'),
                                     Array.from(document.querySelectorAll('a')).find(
-                                        (a) => /next|›|»/i.test((a.textContent || '').trim())
+                                        (a) => /next|›|»/i.test((a.textContent || '').trim()),
                                     ),
                                 ].filter(Boolean);
 
                                 const link = candidates[0];
-
-                                // If it's an <a>, use its href; if it's only a button with JS handler, return null
                                 if (!link) return null;
                                 if (link.tagName.toLowerCase() === 'a' && link.href) {
                                     return link.href;
                                 }
-
                                 return null;
                             });
 
@@ -395,7 +367,7 @@ async function main() {
                                 });
                                 crawlerLog.info(`📄 Enqueued next page via href: ${nextPageHref}`);
                             } else {
-                                // Fallback: conservative ?page= pagination if site supports it
+                                // conservative fallback to ?page= style
                                 try {
                                     const urlObj = new URL(request.url);
                                     urlObj.searchParams.set('page', String(pageNo + 1));
@@ -441,34 +413,22 @@ async function main() {
                             await sleep(1200);
                         }
 
-                        // Additional content-based block detection
-                        const detailBody = await page.evaluate(() => document.body.innerText || '');
-                        if (/access denied|forbidden|unusual traffic|captcha/i.test(detailBody)) {
-                            crawlerLog.warning('⚠️ Block detected on detail page, retiring session');
-                            session?.retire();
-                            throw new Error('Blocked detail page');
-                        }
-
                         // Extract job details with multiple fallbacks
                         const jobData = await page.evaluate(() => {
-                            // Helper function to clean text
                             const cleanText = (text) => text?.trim().replace(/\s+/g, ' ') || null;
 
-                            // Title extraction with fallbacks
                             const title =
                                 cleanText(document.querySelector('h1')?.textContent) ||
                                 cleanText(document.querySelector('[data-testid="job-title"]')?.textContent) ||
                                 cleanText(document.querySelector('.job-title')?.textContent) ||
                                 null;
 
-                            // Company extraction with fallbacks
                             const company =
                                 cleanText(document.querySelector('h2 a')?.textContent) ||
                                 cleanText(document.querySelector('[data-company]')?.textContent) ||
                                 cleanText(document.querySelector('.company-name')?.textContent) ||
                                 null;
 
-                            // Location extraction
                             const locationLinks = document.querySelectorAll('h2 a');
                             const location =
                                 cleanText(locationLinks[1]?.textContent) ||
@@ -476,15 +436,13 @@ async function main() {
                                 cleanText(document.querySelector('.location')?.textContent) ||
                                 null;
 
-                            // Salary extraction
                             const salary =
                                 cleanText(document.querySelector('[class*="salary"]')?.textContent) ||
                                 cleanText(document.querySelector('[data-salary]')?.textContent) ||
                                 null;
 
-                            // Date posted extraction
                             let datePosted = null;
-                            const bodyText = document.body.textContent;
+                            const bodyText = document.body.textContent || '';
                             const datePatterns = [
                                 /Date posted[:\s]*([^\n]+)/i,
                                 /Posted[:\s]*(\d+[dhmyw]?\s*ago)/i,
@@ -499,10 +457,7 @@ async function main() {
                                 }
                             }
 
-                            // Description extraction - get rich content
                             const descriptionElements = [];
-
-                            // Try multiple selectors for description
                             const descContainers = [
                                 document.querySelector('[class*="job-description"]'),
                                 document.querySelector('[class*="description"]'),
@@ -523,7 +478,6 @@ async function main() {
                                 }
                             }
 
-                            // Fallback: get content after h2
                             if (descriptionElements.length === 0) {
                                 const h2 = document.querySelector('h2');
                                 if (h2) {
@@ -562,7 +516,6 @@ async function main() {
                             };
                         });
 
-                        // Validate data
                         if (!jobData.title) {
                             crawlerLog.warning('⚠️ No title found, data might be incomplete');
                         }
@@ -588,7 +541,7 @@ async function main() {
                         saved++;
 
                         crawlerLog.info(
-                            `✅ Saved: "${item.title}" at ${item.company} (${saved}/${RESULTS_WANTED})`
+                            `✅ Saved: "${item.title}" at ${item.company} (${saved}/${RESULTS_WANTED})`,
                         );
                     }
 
@@ -610,7 +563,6 @@ async function main() {
                         pageNo,
                     });
 
-                    // Capture screenshot of error in debug mode
                     if (debugMode) {
                         try {
                             const screenshot = await page.screenshot({ fullPage: true });
@@ -626,6 +578,7 @@ async function main() {
                 }
             },
 
+            // FIXED: new Crawlee signature for failedRequestHandler
             failedRequestHandler({ request, log: crawlerLog }, error) {
                 failed++;
                 const message = error?.message || String(error || '');
@@ -641,7 +594,6 @@ async function main() {
             },
         });
 
-        // Run the crawler
         await crawler.run(
             initialUrls.map((u) => ({
                 url: u,
@@ -649,11 +601,13 @@ async function main() {
             })),
         );
 
-        const duration = (Date.now() - startTime) / 1000;
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
         log.info('🏁 Scraping completed!', {
-            duration_seconds: duration.toFixed(1),
+            duration: `${duration}s`,
             saved,
             failed,
+            success_rate: `${((saved / (saved + failed || 1)) * 100).toFixed(1)}%`,
             list_pages: stats.listPages,
             detail_pages: stats.detailPages,
         });
