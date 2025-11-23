@@ -22,11 +22,12 @@ const USER_AGENTS = [
 
 const pickUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
+// Apify v3 supports top-level await
 await Actor.init();
 
 async function main() {
     const startTime = Date.now();
-    
+
     try {
         const input = (await Actor.getInput()) || {};
         const {
@@ -163,15 +164,14 @@ async function main() {
             maxConcurrency: 6,
             navigationTimeoutSecs: 25,
             preNavigationHooks: [
-                async ({ page, request, session }) => {
+                async ({ page, session }) => {
                     // Set up page before navigation to avoid detection
                     if (!session.userData.ua) session.userData.ua = pickUserAgent();
                     await page.setUserAgent(session.userData.ua);
-                    
+
                     await page.setExtraHTTPHeaders({
                         'Accept-Language': 'en-US,en;q=0.9',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                        'Accept-Encoding': 'gzip, deflate, br',
                         'DNT': '1',
                         'Connection': 'keep-alive',
                         'Upgrade-Insecure-Requests': '1',
@@ -206,9 +206,9 @@ async function main() {
                     await page.evaluateOnNewDocument(() => {
                         const originalQuery = window.navigator.permissions.query;
                         window.navigator.permissions.query = (parameters) => (
-                            parameters.name === 'notifications' ?
-                                Promise.resolve({ state: Notification.permission }) :
-                                originalQuery(parameters)
+                            parameters.name === 'notifications'
+                                ? Promise.resolve({ state: Notification.permission })
+                                : originalQuery(parameters)
                         );
                     });
 
@@ -281,8 +281,8 @@ async function main() {
                     if (label === 'LIST') {
                         stats.listPages++;
 
-                        // Ensure page load
-                        await page.waitForTimeout(1200);
+                        // Small delay to allow page to paint
+                        await sleep(1200);
 
                         // Basic heuristic to detect "blocked" content (captcha, "access denied")
                         const bodyText = await page.evaluate(() => document.body.innerText || '');
@@ -292,14 +292,14 @@ async function main() {
                             throw new Error('Blocked by page content');
                         }
 
-                        // Small delay for dynamic content to load
+                        // Extra delay for dynamic content
                         await sleep(1000);
 
                         // Extract job links with deduplication
                         const jobLinks = await page.evaluate(() => {
                             const links = document.querySelectorAll('a[href*="/jobview/"]');
                             const uniqueLinks = new Set();
-                            
+
                             links.forEach((link) => {
                                 const href = link.href;
                                 if (href && href.includes('/jobview/')) {
@@ -308,7 +308,7 @@ async function main() {
                                     uniqueLinks.add(cleanUrl);
                                 }
                             });
-                            
+
                             return Array.from(uniqueLinks);
                         });
 
@@ -317,8 +317,12 @@ async function main() {
                         if (jobLinks.length === 0) {
                             crawlerLog.warning('⚠️ No job links extracted, possible page structure change');
                             if (debugMode) {
-                                const screenshot = await page.screenshot({ fullPage: true });
-                                await Actor.setValue(`debug-screenshot-empty-list-page-${pageNo}.png`, screenshot, { contentType: 'image/png' });
+                                try {
+                                    const screenshot = await page.screenshot({ fullPage: true });
+                                    await Actor.setValue(`debug-screenshot-empty-list-page-${pageNo}.png`, screenshot, { contentType: 'image/png' });
+                                } catch {
+                                    // ignore screenshot errors
+                                }
                             }
                             return;
                         }
@@ -329,7 +333,7 @@ async function main() {
                             const toEnqueue = jobLinks
                                 .slice(0, Math.max(0, remaining))
                                 .filter((link) => !seenUrls.has(link));
-                            
+
                             toEnqueue.forEach((link) => seenUrls.add(link));
 
                             if (toEnqueue.length > 0) {
@@ -345,7 +349,7 @@ async function main() {
                             const toPush = jobLinks
                                 .slice(0, Math.max(0, remaining))
                                 .filter((link) => !seenUrls.has(link));
-                            
+
                             toPush.forEach((link) => seenUrls.add(link));
 
                             if (toPush.length > 0) {
@@ -354,7 +358,7 @@ async function main() {
                                     _source: 'careerone.com.au',
                                     _scraped_at: new Date().toISOString(),
                                 }));
-                                
+
                                 await Dataset.pushData(items);
                                 saved += toPush.length;
                                 crawlerLog.info(`💾 Saved ${toPush.length} job URLs (total: ${saved}/${RESULTS_WANTED})`);
@@ -486,7 +490,7 @@ async function main() {
                                 /Posted[:\s]*(\d+[dhmyw]?\s*ago)/i,
                                 /Posted[:\s]*([^\n]+)/i,
                             ];
-                            
+
                             for (const pattern of datePatterns) {
                                 const match = bodyText.match(pattern);
                                 if (match) {
@@ -497,7 +501,7 @@ async function main() {
 
                             // Description extraction - get rich content
                             const descriptionElements = [];
-                            
+
                             // Try multiple selectors for description
                             const descContainers = [
                                 document.querySelector('[class*="job-description"]'),
@@ -582,7 +586,7 @@ async function main() {
 
                         await Dataset.pushData(item);
                         saved++;
-                        
+
                         crawlerLog.info(
                             `✅ Saved: "${item.title}" at ${item.company} (${saved}/${RESULTS_WANTED})`
                         );
@@ -592,7 +596,6 @@ async function main() {
                     if (debugMode) {
                         crawlerLog.debug(`⏱️ Request completed in ${requestTime}ms`);
                     }
-                    
                 } catch (error) {
                     failed++;
                     stats.errors.push({
@@ -614,9 +617,9 @@ async function main() {
                             await Actor.setValue(
                                 `error-${label.toLowerCase()}-page-${pageNo}-${Date.now()}.png`,
                                 screenshot,
-                                { contentType: 'image/png' }
+                                { contentType: 'image/png' },
                             );
-                        } catch (screenshotErr) {
+                        } catch {
                             crawlerLog.warning('Failed to capture error screenshot');
                         }
                     }
@@ -643,7 +646,7 @@ async function main() {
             initialUrls.map((u) => ({
                 url: u,
                 userData: { label: 'LIST', pageNo: 1 },
-            }))
+            })),
         );
 
         const duration = (Date.now() - startTime) / 1000;
@@ -663,7 +666,6 @@ async function main() {
         if (saved === 0) {
             log.warning('⚠️ No jobs were saved. Please check the logs and selectors.');
         }
-        
     } catch (error) {
         log.error('❌ Fatal error in main function:', {
             message: error.message,
