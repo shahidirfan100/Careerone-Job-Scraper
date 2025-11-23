@@ -120,7 +120,6 @@ async function main() {
             requestHandlerTimeoutSecs: 90,
             maxConcurrency: 8,
             navigationTimeoutSecs: 60,
-            blockedStatusCodes: [], // handle blocks manually to rotate session/proxy
             preNavigationHooks: [
                 async ({ page, request, session }) => {
                     // Set up page before navigation to avoid detection
