@@ -2,7 +2,7 @@
 // Fast, stealthy, and robust scraping with comprehensive error handling
 
 import { Actor, log } from 'apify';
-import { PuppeteerCrawler, Dataset } from 'crawlee';
+import { PuppeteerCrawler, Dataset, sleep } from 'crawlee';
 import puppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -223,7 +223,7 @@ async function main() {
                         }
 
                         // Small delay for dynamic content to load
-                        await Actor.sleep(2000);
+                        await sleep(2000);
 
                         // Extract job links with deduplication
                         const jobLinks = await page.evaluate(() => {
@@ -333,7 +333,7 @@ async function main() {
                             await page.waitForSelector('h1', { timeout: 15000 });
                         } catch (err) {
                             crawlerLog.warning('⚠️ H1 not found, trying alternative wait');
-                            await Actor.sleep(3000);
+                            await sleep(3000);
                         }
 
                         // Extract job details with multiple fallbacks
