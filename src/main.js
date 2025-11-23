@@ -137,7 +137,8 @@ async function main() {
                     await page.setRequestInterception(true);
                     page.on('request', (req) => {
                         const resourceType = req.resourceType();
-                        if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+                        // Block heavy assets while keeping layout-critical resources
+                        if (['image', 'font', 'media'].includes(resourceType)) {
                             req.abort();
                         } else {
                             req.continue();
@@ -222,7 +223,7 @@ async function main() {
                         }
 
                         // Small delay for dynamic content to load
-                        await page.waitForTimeout(2000);
+                        await Actor.sleep(2000);
 
                         // Extract job links with deduplication
                         const jobLinks = await page.evaluate(() => {
@@ -332,7 +333,7 @@ async function main() {
                             await page.waitForSelector('h1', { timeout: 15000 });
                         } catch (err) {
                             crawlerLog.warning('⚠️ H1 not found, trying alternative wait');
-                            await page.waitForTimeout(3000);
+                            await Actor.sleep(3000);
                         }
 
                         // Extract job details with multiple fallbacks

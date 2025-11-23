@@ -4,8 +4,8 @@
     "type": "module",
     "description": "Careerone jobs scraper using Puppeteer for JavaScript rendering.",
     "dependencies": {
-        "apify": "^3.4.2",
-        "crawlee": "^3.13.8",
+        "apify": "^3.4.4",
+        "crawlee": "^3.14.1",
         "puppeteer": "24.12.1",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-stealth": "^2.11.2"
