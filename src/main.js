@@ -91,12 +91,65 @@ async function main() {
             proxyConfiguration: proxyConf,
             maxRequestRetries: 3,
             requestHandlerTimeoutSecs: 120,
-            maxConcurrency: 3, // Reduced for stability
-            navigationTimeoutSecs: 60,
+            maxConcurrency: 2, // Further reduced for stability
+            navigationTimeoutSecs: 90,
+            preNavigationHooks: [
+                async ({ page, request }) => {
+                    // Set up page before navigation to avoid detection
+                    await page.setUserAgent(
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+                    );
+                    
+                    await page.setExtraHTTPHeaders({
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                    });
+
+                    // Additional stealth: hide webdriver property
+                    await page.evaluateOnNewDocument(() => {
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => false,
+                        });
+                        
+                        // Mock chrome object
+                        window.chrome = {
+                            runtime: {},
+                        };
+                        
+                        // Mock permissions
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) => (
+                            parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                        );
+                    });
+
+                    // Block unnecessary resources for speed
+                    await page.setRequestInterception(true);
+                    page.on('request', (req) => {
+                        const resourceType = req.resourceType();
+                        if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+                            req.abort();
+                        } else {
+                            req.continue();
+                        }
+                    });
+                },
+            ],
             launchContext: {
                 launcher: puppeteerExtra,
                 launchOptions: {
                     headless: true,
+                    ignoreHTTPSErrors: true,
                     args: [
                         '--no-sandbox',
                         '--disable-setuid-sandbox',
@@ -117,8 +170,8 @@ async function main() {
                         '--no-default-browser-check',
                         '--safebrowsing-disable-auto-update',
                         // Memory optimizations
-                        '--single-process',
                         '--disable-dev-shm-usage',
+                        '--disk-cache-size=0',
                     ],
                     defaultViewport: {
                         width: 1920,
@@ -135,37 +188,9 @@ async function main() {
 
                 crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
 
-                // Set realistic browser behavior
-                await page.setUserAgent(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-                );
-                
-                await page.setExtraHTTPHeaders({
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                });
-
-                // Block unnecessary resources for speed
-                await page.setRequestInterception(true);
-                page.on('request', (req) => {
-                    const resourceType = req.resourceType();
-                    if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-                        req.abort();
-                    } else {
-                        req.continue();
-                    }
-                });
-
                 try {
                     if (label === 'LIST') {
                         stats.listPages++;
-                        
-                        // Wait for page to load
-                        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
                         
                         // Wait for job listings with multiple selectors
                         const selectors = [
@@ -196,8 +221,8 @@ async function main() {
                             return;
                         }
 
-                        // Small delay for dynamic content
-                        await page.waitForTimeout(1000);
+                        // Small delay for dynamic content to load
+                        await page.waitForTimeout(2000);
 
                         // Extract job links with deduplication
                         const jobLinks = await page.evaluate(() => {
