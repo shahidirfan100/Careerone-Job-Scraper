@@ -89,10 +89,21 @@ async function main() {
         // Create Puppeteer crawler with optimized settings
         const crawler = new PuppeteerCrawler({
             proxyConfiguration: proxyConf,
+            useSessionPool: true,
+            sessionPoolOptions: {
+                maxPoolSize: 40,
+                sessionOptions: { maxUsageCount: 8 },
+            },
+            autoscaledPoolOptions: {
+                minConcurrency: 1,
+                desiredConcurrency: 4,
+                scaleUpStepRatio: 0.5,
+                scaleDownStepRatio: 0.25,
+            },
             maxRequestRetries: 3,
-            requestHandlerTimeoutSecs: 120,
-            maxConcurrency: 2, // Further reduced for stability
-            navigationTimeoutSecs: 90,
+            requestHandlerTimeoutSecs: 90,
+            maxConcurrency: 8,
+            navigationTimeoutSecs: 60,
             preNavigationHooks: [
                 async ({ page, request }) => {
                     // Set up page before navigation to avoid detection
@@ -175,8 +186,8 @@ async function main() {
                         '--disk-cache-size=0',
                     ],
                     defaultViewport: {
-                        width: 1920,
-                        height: 1080,
+                        width: 1366,
+                        height: 768,
                     },
                 },
                 useChrome: false,
@@ -223,7 +234,7 @@ async function main() {
                         }
 
                         // Small delay for dynamic content to load
-                        await sleep(2000);
+                        await sleep(1000);
 
                         // Extract job links with deduplication
                         const jobLinks = await page.evaluate(() => {
@@ -333,7 +344,7 @@ async function main() {
                             await page.waitForSelector('h1', { timeout: 15000 });
                         } catch (err) {
                             crawlerLog.warning('⚠️ H1 not found, trying alternative wait');
-                            await sleep(3000);
+                            await sleep(1200);
                         }
 
                         // Extract job details with multiple fallbacks
