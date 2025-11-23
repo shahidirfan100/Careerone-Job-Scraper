@@ -1,5 +1,5 @@
 // Careerone Jobs Scraper - Production-Ready Puppeteer Implementation
-// Tuned for speed, higher concurrency, and reduced blocking
+// Tuned for speed, concurrency, and robust job extraction (with cookie/consent handling)
 
 import { Actor, log } from 'apify';
 import { PuppeteerCrawler, Dataset, sleep } from 'crawlee';
@@ -130,11 +130,10 @@ async function main() {
                 sessionOptions: { maxUsageCount: 4 },
             },
 
-            // Key: let autoscaler be more aggressive on concurrency
+            // Allow decent concurrency (avoid being stuck at 1)
             autoscaledPoolOptions: {
                 minConcurrency: 2,
                 maxConcurrency: 8,
-                // Loosen CPU/memory thresholds so we don't stay stuck at 1
                 systemStatusOptions: {
                     maxCpuOverloadedRatio: 0.9,
                     maxMemoryOverloadedRatio: 0.8,
@@ -142,8 +141,6 @@ async function main() {
                     maxClientOverloadedRatio: 0.9,
                 },
             },
-
-            // Also set aliases directly
             minConcurrency: 2,
             maxConcurrency: 8,
 
@@ -151,7 +148,7 @@ async function main() {
             requestHandlerTimeoutSecs: 45,
             navigationTimeoutSecs: 30,
 
-            // Handle block-style errors (Crawlee v3 signature)
+            // Crawlee v3 error handler
             errorHandler(context, error) {
                 const { session, log: crawlerLog } = context;
                 if (session && /403|429|blocked/i.test(error?.message || '')) {
@@ -197,12 +194,12 @@ async function main() {
                         'Accept-Language': 'en-US,en;q=0.9',
                     });
 
-                    // Block heavy resources to reduce CPU & speed up
+                    // Block heavy resources (but keep stylesheets!)
                     if (!page._requestInterception) {
                         await page.setRequestInterception(true);
                         page.on('request', (req) => {
                             const type = req.resourceType();
-                            if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+                            if (['image', 'font', 'media'].includes(type)) {
                                 req.abort();
                             } else {
                                 req.continue();
@@ -229,7 +226,6 @@ async function main() {
                 try {
                     const status = response?.status();
                     if (status === 403 || status === 429) {
-                        // Let autoscaler rotate sessions, but don't overreact
                         crawlerLog.warning(`?? Detected HTTP ${status} on ${label}, retiring session`);
                         session?.retire();
                         throw new Error(`Blocked with status ${status}`);
@@ -238,11 +234,34 @@ async function main() {
                     if (label === 'LIST') {
                         stats.listPages++;
 
-                        // Wait for job cards quickly; no giant scroll loops
-                        const jobSelector = 'a[href*="/jobview/"]';
-                        await page.waitForSelector(jobSelector, { timeout: 15000 }).catch(() => null);
+                        // Wait for full page load (JS etc.)
+                        await page.evaluate(
+                            () =>
+                                new Promise((resolve) => {
+                                    if (document.readyState === 'complete') return resolve();
+                                    window.addEventListener('load', () => resolve(), { once: true });
+                                }),
+                        );
 
-                        // Small, bounded scroll to trigger lazy-loaded bits
+                        // 1) Try to dismiss cookie/consent / "Done" overlays
+                        await page.evaluate(() => {
+                            const clickable = Array.from(
+                                document.querySelectorAll('button, [role="button"], a'),
+                            );
+                            const doneLike = clickable.filter((el) =>
+                                /done|accept|ok/i.test(el.textContent || ''),
+                            );
+                            doneLike.forEach((el) => {
+                                try {
+                                    el.click();
+                                } catch (e) {
+                                    // ignore
+                                }
+                            });
+                        });
+                        await sleep(500);
+
+                        // 2) Short, bounded scroll to trigger lazy load
                         await page.evaluate(async () => {
                             const wait = (ms) => new Promise((res) => setTimeout(res, ms));
                             for (let i = 0; i < 5; i++) {
@@ -251,10 +270,12 @@ async function main() {
                             }
                         });
 
-                        // One small extra wait for JS finishing
-                        await sleep(500);
+                        // 3) Wait for job anchors to appear (if they do)
+                        const jobSelector = 'a[href*="/jobview/"]';
+                        await page.waitForSelector(jobSelector, { timeout: 15000 }).catch(() => null);
+                        await sleep(300);
 
-                        // Extract job links
+                        // 4) Extract job links
                         const jobLinks = await page.evaluate(() => {
                             const anchors = document.querySelectorAll('a[href*="/jobview/"]');
                             const out = new Set();
@@ -269,19 +290,22 @@ async function main() {
                         crawlerLog.info(`📊 Found ${jobLinks.length} unique job links on page ${pageNo}`);
 
                         if (!jobLinks.length) {
-                            crawlerLog.warning('⚠️ No job links extracted, possible layout change or block.');
-                            if (debugMode) {
-                                try {
-                                    const screenshot = await page.screenshot({ fullPage: true });
-                                    await Actor.setValue(
-                                        `debug-empty-list-page-${pageNo}.png`,
-                                        screenshot,
-                                        { contentType: 'image/png' },
-                                    );
-                                } catch {
-                                    // ignore
-                                }
+                            crawlerLog.warning(
+                                '⚠️ No job links extracted, possible cookie/banner overlay, layout change or block.',
+                            );
+
+                            // Save HTML to KV store for debugging even if debugMode=false
+                            try {
+                                const html = await page.content();
+                                await Actor.setValue(
+                                    `debug-list-page-${pageNo}.html`,
+                                    html,
+                                    { contentType: 'text/html; charset=utf-8' },
+                                );
+                            } catch {
+                                // ignore
                             }
+
                             return;
                         }
 
@@ -341,7 +365,7 @@ async function main() {
                                 });
                                 crawlerLog.info(`📄 Enqueued next page via href: ${nextPageHref}`);
                             } else {
-                                // Fallback: ?page=N, only if it actually changes URL
+                                // Fallback: ?page=N
                                 try {
                                     const u = new URL(request.url);
                                     u.searchParams.set('page', String(pageNo + 1));
@@ -372,11 +396,10 @@ async function main() {
                             return;
                         }
 
-                        // Tiny jitter to avoid hammering exact intervals
+                        // Small jitter; still fast (detail pages can run in parallel)
                         await sleep(80 + Math.floor(Math.random() * 120));
                         stats.detailPages++;
 
-                        // Wait main title quickly
                         await page.waitForSelector('h1', { timeout: 10000 }).catch(() => null);
 
                         const jobData = await page.evaluate(() => {
@@ -421,7 +444,6 @@ async function main() {
                                 }
                             }
 
-                            // Short, bounded description grab
                             const descriptionElements = [];
                             const containers = [
                                 document.querySelector('[class*="job-description"]'),
@@ -566,7 +588,7 @@ async function main() {
         }
 
         if (!saved) {
-            log.warning('⚠️ No jobs were saved. Please check the logs and selectors.');
+            log.warning('⚠️ No jobs were saved. Please check the debug-list-page-*.html in Key-value store.');
         }
     } catch (err) {
         log.error('❌ Fatal error in main():', { message: err.message, stack: err.stack });
