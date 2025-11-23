@@ -9,6 +9,16 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 // Configure stealth plugin with all evasion techniques
 puppeteerExtra.use(StealthPlugin());
 
+// Rotate user agents across sessions to avoid easy fingerprinting
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+];
+
+const pickUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+
 await Actor.init();
 
 async function main() {
@@ -91,8 +101,14 @@ async function main() {
             proxyConfiguration: proxyConf,
             useSessionPool: true,
             sessionPoolOptions: {
-                maxPoolSize: 40,
-                sessionOptions: { maxUsageCount: 8 },
+                maxPoolSize: 60,
+                sessionOptions: { maxUsageCount: 6 },
+            },
+            errorHandler({ error, session, log: crawlerLog }) {
+                if (session && /403|429|blocked/i.test(error?.message || '')) {
+                    crawlerLog.warning('?? Retiring session due to block error');
+                    session.retire();
+                }
             },
             autoscaledPoolOptions: {
                 minConcurrency: 1,
@@ -100,16 +116,16 @@ async function main() {
                 scaleUpStepRatio: 0.5,
                 scaleDownStepRatio: 0.25,
             },
-            maxRequestRetries: 3,
+            maxRequestRetries: 5,
             requestHandlerTimeoutSecs: 90,
             maxConcurrency: 8,
             navigationTimeoutSecs: 60,
+            blockedStatusCodes: [], // handle blocks manually to rotate session/proxy
             preNavigationHooks: [
-                async ({ page, request }) => {
+                async ({ page, request, session }) => {
                     // Set up page before navigation to avoid detection
-                    await page.setUserAgent(
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-                    );
+                    if (!session.userData.ua) session.userData.ua = pickUserAgent();
+                    await page.setUserAgent(session.userData.ua);
                     
                     await page.setExtraHTTPHeaders({
                         'Accept-Language': 'en-US,en;q=0.9',
@@ -122,6 +138,8 @@ async function main() {
                         'Sec-Fetch-Mode': 'navigate',
                         'Sec-Fetch-Site': 'none',
                         'Sec-Fetch-User': '?1',
+                        'Pragma': 'no-cache',
+                        'Cache-Control': 'no-cache',
                     });
 
                     // Additional stealth: hide webdriver property
@@ -193,7 +211,7 @@ async function main() {
                 useChrome: false,
             },
 
-            async requestHandler({ request, page, enqueueLinks, log: crawlerLog }) {
+            async requestHandler({ request, page, enqueueLinks, log: crawlerLog, session, response }) {
                 const label = request.userData?.label || 'LIST';
                 const pageNo = request.userData?.pageNo || 1;
                 const requestStart = Date.now();
@@ -201,6 +219,14 @@ async function main() {
                 crawlerLog.info(`[${label}] Page ${pageNo}: ${request.url}`);
 
                 try {
+                    // If we land on a block page, retire the session and retry
+                    const status = response?.status();
+                    if (status === 403 || status === 429) {
+                        crawlerLog.warning(`?? Detected block status ${status}, retiring session`);
+                        session?.retire();
+                        throw new Error(`Blocked with status ${status}`);
+                    }
+
                     if (label === 'LIST') {
                         stats.listPages++;
                         
