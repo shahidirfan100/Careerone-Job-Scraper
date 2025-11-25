@@ -76,9 +76,9 @@ async function main() {
         const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 10;
         const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 5;
 
-        log.setLevel(debugMode ? log.LEVELS.DEBUG : log.LEVELS.INFO);
+        log.setLevel(debugMode ? log.LEVELS.DEBUG : log.LEVELS.WARNING);
 
-        log.info('🚀 Starting Careerone Jobs Scraper (Production)', {
+        log.warning('🚀 Starting Careerone Jobs Scraper (Production)', {
             keyword, location, results_wanted: RESULTS_WANTED, max_pages: MAX_PAGES, collectDetails,
         });
 
@@ -95,14 +95,14 @@ async function main() {
         }
         initialUrls = [...new Set(initialUrls)];
 
-        log.info('📍 Initial URLs:', { urls: initialUrls });
+        log.warning('📍 Initial URLs:', { urls: initialUrls });
 
         // Proxy configuration - use residential for best results
         const proxyConf = proxyConfiguration
             ? await Actor.createProxyConfiguration(proxyConfiguration)
             : await Actor.createProxyConfiguration({ useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] });
 
-        if (proxyConf) log.info('🔐 Proxy enabled');
+        if (proxyConf) log.warning('🔐 Proxy enabled');
 
         // Stats
         let saved = 0;
@@ -122,20 +122,20 @@ async function main() {
             useSessionPool: true,
             sessionPoolOptions: {
                 maxPoolSize: 40,
-                sessionOptions: { maxUsageCount: 30 },
+                sessionOptions: { maxUsageCount: 25 },
             },
             persistCookiesPerSession: true,
 
             // Faster throughput
-            minConcurrency: 6,
-            maxConcurrency: 12,
+            minConcurrency: 3,
+            maxConcurrency: 8,
             
             // Retry settings
-            maxRequestRetries: 2,
+            maxRequestRetries: 1,
             
             // Timeouts tuned for slower pages
-            navigationTimeoutSecs: 25,
-            requestHandlerTimeoutSecs: 60,
+            navigationTimeoutSecs: 40,
+            requestHandlerTimeoutSecs: 75,
 
             // Browser launch - optimized for Apify
             launchContext: {
@@ -158,10 +158,10 @@ async function main() {
 
             // Autoscaling for high throughput
             autoscaledPoolOptions: {
-                desiredConcurrency: 10,
-                minConcurrency: 6,
-                maxConcurrency: 14,
-                scaleUpStepRatio: 0.4,
+                desiredConcurrency: 6,
+                minConcurrency: 3,
+                maxConcurrency: 8,
+                scaleUpStepRatio: 0.25,
                 scaleDownStepRatio: 0.2,
             },
 
@@ -320,8 +320,8 @@ async function main() {
             }
 
             // Wait for content
-            await page.waitForLoadState('domcontentloaded', { timeout: 6000 }).catch(() => {});
-            await page.waitForSelector('a[href*="/jobview/"]', { timeout: 3000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+            await page.waitForSelector('a[href*="/jobview/"]', { timeout: 5000 }).catch(() => {});
             
             // Scroll to load more jobs (lazy loading)
             await autoScroll(page);
@@ -397,8 +397,8 @@ async function main() {
             }
 
             // Wait for content to fully load
-            await page.waitForLoadState('domcontentloaded', { timeout: 6000 }).catch(() => {});
-            await page.waitForSelector('h1', { timeout: 3000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+            await page.waitForSelector('h1', { timeout: 5000 }).catch(() => {});
             
             // Scroll down to trigger lazy-loaded content
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
