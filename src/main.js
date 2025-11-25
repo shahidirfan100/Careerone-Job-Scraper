@@ -126,16 +126,16 @@ async function main() {
             },
             persistCookiesPerSession: true,
 
-            // Start conservative, scale automatically
-            minConcurrency: 2,
-            maxConcurrency: 8,
+            // Faster throughput
+            minConcurrency: 4,
+            maxConcurrency: 12,
             
             // Retry settings
-            maxRequestRetries: 4,
+            maxRequestRetries: 3,
             
             // Timeouts tuned for slower pages
-            navigationTimeoutSecs: 45,
-            requestHandlerTimeoutSecs: 90,
+            navigationTimeoutSecs: 35,
+            requestHandlerTimeoutSecs: 70,
 
             // Browser launch - optimized for Apify
             launchContext: {
@@ -158,11 +158,11 @@ async function main() {
 
             // Autoscaling for high throughput
             autoscaledPoolOptions: {
-                desiredConcurrency: 4,
-                minConcurrency: 2,
-                maxConcurrency: 8,
-                scaleUpStepRatio: 0.2,
-                scaleDownStepRatio: 0.1,
+                desiredConcurrency: 8,
+                minConcurrency: 4,
+                maxConcurrency: 12,
+                scaleUpStepRatio: 0.3,
+                scaleDownStepRatio: 0.15,
             },
 
             // Pre-navigation hooks for stealth
@@ -259,7 +259,7 @@ async function main() {
             postNavigationHooks: [
                 async ({ page, session }) => {
                     // Small delay after navigation for JS to execute
-                    await page.waitForTimeout(400 + Math.random() * 250);
+                    await page.waitForTimeout(250 + Math.random() * 200);
 
                     // If page clearly blocked, retire session early
                     const title = await page.title().catch(() => '');
@@ -310,8 +310,8 @@ async function main() {
             }
 
             // Wait for content
-            await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
-            await page.waitForSelector('a[href*="/jobview/"]', { timeout: 12000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+                    await page.waitForSelector('a[href*="/jobview/"]', { timeout: 4000 }).catch(() => {});
             
             // Scroll to load more jobs (lazy loading)
             await autoScroll(page);
@@ -387,12 +387,12 @@ async function main() {
             }
 
             // Wait for content to fully load
-            await page.waitForLoadState('domcontentloaded', { timeout: 12000 }).catch(() => {});
-            await page.waitForSelector('h1', { timeout: 8000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+            await page.waitForSelector('h1', { timeout: 5000 }).catch(() => {});
             
             // Scroll down to trigger lazy-loaded content
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
-            await page.waitForTimeout(400);
+            await page.waitForTimeout(200);
 
             stats.detailPages++;
 
@@ -612,7 +612,7 @@ async function main() {
             await page.evaluate(async () => {
                 await new Promise((resolve) => {
                     let totalHeight = 0;
-                    const distance = 500;
+                    const distance = 700;
                     const timer = setInterval(() => {
                         window.scrollBy(0, distance);
                         totalHeight += distance;
@@ -620,12 +620,12 @@ async function main() {
                             clearInterval(timer);
                             resolve();
                         }
-                    }, 120);
-                    // Max ~3 seconds of scrolling
-                    setTimeout(() => { clearInterval(timer); resolve(); }, 3200);
+                    }, 100);
+                    // Max ~2 seconds of scrolling
+                    setTimeout(() => { clearInterval(timer); resolve(); }, 2000);
                 });
             });
-            await page.waitForTimeout(500);
+            await page.waitForTimeout(200);
         }
 
         // Build next page URL
