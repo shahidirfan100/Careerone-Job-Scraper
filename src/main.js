@@ -28,32 +28,6 @@ const pickUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.l
 const randomDelay = (min = 100, max = 500) => 
     new Promise(resolve => setTimeout(resolve, min + Math.random() * (max - min)));
 
-const safeJsonParse = (txt) => {
-    if (!txt) return null;
-    try { return JSON.parse(txt); } catch { return null; }
-};
-
-const findJobPosting = (node) => {
-    if (!node) return null;
-    if (Array.isArray(node)) {
-        for (const item of node) {
-            const found = findJobPosting(item);
-            if (found) return found;
-        }
-        return null;
-    }
-    if (typeof node === 'object') {
-        const type = node['@type'];
-        if (typeof type === 'string' && type.toLowerCase().includes('jobposting')) return node;
-        if (Array.isArray(type) && type.some((t) => String(t).toLowerCase().includes('jobposting'))) return node;
-        for (const val of Object.values(node)) {
-            const found = findJobPosting(val);
-            if (found) return found;
-        }
-    }
-    return null;
-};
-
 const clean = (t) => (t ? t.trim().replace(/\s+/g, ' ') : null);
 
 const buildStartUrl = (kw, loc, category) => {
@@ -88,18 +62,19 @@ async function main() {
             keyword = '',
             location = '',
             category = '',
-            results_wanted: RESULTS_WANTED_RAW = 100,
-            max_pages: MAX_PAGES_RAW = 20,
+            results_wanted: RESULTS_WANTED_RAW = 10,
+            max_pages: MAX_PAGES_RAW = 5,
             collectDetails = true,
             startUrl,
             startUrls,
             url,
             proxyConfiguration,
             debugMode = false,
+            dedupe = true,
         } = input;
 
-        const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 100;
-        const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 20;
+        const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : 10;
+        const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : 5;
 
         log.setLevel(debugMode ? log.LEVELS.DEBUG : log.LEVELS.INFO);
 
@@ -133,7 +108,7 @@ async function main() {
         let saved = 0;
         let failed = 0;
         const seenUrls = new Set();
-        const stats = { listPages: 0, detailPages: 0, errors: [] };
+        const stats = { listPages: 0, detailPages: 0, errors: [], blocked: 0 };
 
         // Create request queue for better control
         const requestQueue = await RequestQueue.open();
@@ -146,21 +121,21 @@ async function main() {
             // Session pool for stealth
             useSessionPool: true,
             sessionPoolOptions: {
-                maxPoolSize: 20,
-                sessionOptions: { maxUsageCount: 50 },
+                maxPoolSize: 30,
+                sessionOptions: { maxUsageCount: 40 },
             },
             persistCookiesPerSession: true,
 
-            // HIGH CONCURRENCY for speed
-            minConcurrency: 5,
-            maxConcurrency: 10,
+            // Start conservative, scale automatically
+            minConcurrency: 2,
+            maxConcurrency: 8,
             
             // Retry settings
-            maxRequestRetries: 5,
+            maxRequestRetries: 4,
             
-            // Timeouts - reduced for speed
-            navigationTimeoutSecs: 30,
-            requestHandlerTimeoutSecs: 60,
+            // Timeouts tuned for slower pages
+            navigationTimeoutSecs: 45,
+            requestHandlerTimeoutSecs: 90,
 
             // Browser launch - optimized for Apify
             launchContext: {
@@ -183,23 +158,27 @@ async function main() {
 
             // Autoscaling for high throughput
             autoscaledPoolOptions: {
-                desiredConcurrency: 8,
-                minConcurrency: 5,
-                maxConcurrency: 10,
-                scaleUpStepRatio: 0.1,
-                scaleDownStepRatio: 0.05,
+                desiredConcurrency: 4,
+                minConcurrency: 2,
+                maxConcurrency: 8,
+                scaleUpStepRatio: 0.2,
+                scaleDownStepRatio: 0.1,
             },
 
             // Pre-navigation hooks for stealth
             preNavigationHooks: [
-                async ({ page, request }) => {
+                async ({ page, request, session }) => {
                     // Random viewport
-                    const width = 1280 + Math.floor(Math.random() * 400);
-                    const height = 720 + Math.floor(Math.random() * 200);
+                    const width = 1200 + Math.floor(Math.random() * 300);
+                    const height = 720 + Math.floor(Math.random() * 240);
                     await page.setViewportSize({ width, height });
+
+                    const ua = pickUserAgent();
+                    const ref = request.userData?.referrer || 'https://www.google.com/';
 
                     // Headers
                     await page.setExtraHTTPHeaders({
+                        'user-agent': ua,
                         'Accept-Language': 'en-AU,en-GB;q=0.9,en;q=0.8',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                         'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
@@ -210,6 +189,7 @@ async function main() {
                         'sec-fetch-site': 'none',
                         'sec-fetch-user': '?1',
                         'upgrade-insecure-requests': '1',
+                        'referer': ref,
                     });
 
                     // Block heavy resources
@@ -254,15 +234,38 @@ async function main() {
                         Object.defineProperty(navigator, 'languages', {
                             get: () => ['en-AU', 'en-GB', 'en'],
                         });
+
+                        // Hardware hints
+                        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                        Object.defineProperty(navigator, 'language', { get: () => 'en-AU' });
                     });
+
+                    // Light jitter to reduce concurrency spikes
+                    await randomDelay(50, 200);
+
+                    // Track referrer chain for detail pages
+                    if (request.userData?.fromPageUrl) {
+                        request.userData.referrer = request.userData.fromPageUrl;
+                    }
+
+                    // Reset blocked sessions quickly
+                    session?.markGood();
                 },
             ],
 
             // Post-navigation hook
             postNavigationHooks: [
-                async ({ page }) => {
+                async ({ page, session }) => {
                     // Small delay after navigation for JS to execute
-                    await page.waitForTimeout(500);
+                    await page.waitForTimeout(400 + Math.random() * 250);
+
+                    // If page clearly blocked, retire session early
+                    const title = await page.title().catch(() => '');
+                    if (title.toLowerCase().includes('access denied') || title.toLowerCase().includes('forbidden')) {
+                        session?.retire();
+                    }
                 },
             ],
 
@@ -273,7 +276,9 @@ async function main() {
 
                 // Check for blocks
                 const url = page.url();
-                if (url.includes('blocked') || url.includes('captcha') || url.includes('challenge')) {
+                const pageTitle = await page.title().catch(() => '');
+                if (url.includes('blocked') || url.includes('captcha') || url.includes('challenge') || pageTitle.toLowerCase().includes('access denied')) {
+                    stats.blocked++;
                     session?.retire();
                     throw new Error('Blocked or captcha detected');
                 }
@@ -289,6 +294,7 @@ async function main() {
 
             failedRequestHandler({ request, log: crawlerLog }, error) {
                 failed++;
+                if (String(error?.message || '').includes('403')) stats.blocked++;
                 crawlerLog.error(`❌ Failed: ${request.url}`, { error: error?.message });
                 stats.errors.push({ url: request.url, error: error?.message });
             },
@@ -304,7 +310,8 @@ async function main() {
             }
 
             // Wait for content
-            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+            await page.waitForSelector('a[href*="/jobview/"]', { timeout: 12000 }).catch(() => {});
             
             // Scroll to load more jobs (lazy loading)
             await autoScroll(page);
@@ -312,14 +319,13 @@ async function main() {
             stats.listPages++;
 
             // Extract all job links
-            const jobLinks = await page.evaluate(() => {
+            const jobLinks = await page.$$eval('a[href*="/jobview/"]', (anchors) => {
                 const links = new Set();
-                document.querySelectorAll('a[href*="/jobview/"]').forEach((el) => {
+                anchors.forEach((el) => {
                     const href = el.getAttribute('href');
-                    if (href) {
-                        const fullUrl = href.startsWith('http') ? href : `https://www.careerone.com.au${href}`;
-                        links.add(fullUrl.split('?')[0]);
-                    }
+                    if (!href) return;
+                    const fullUrl = href.startsWith('http') ? href : `https://www.careerone.com.au${href}`;
+                    links.add(fullUrl.split('?')[0]);
                 });
                 return [...links];
             });
@@ -334,7 +340,9 @@ async function main() {
 
             // Filter and enqueue new jobs
             const remaining = RESULTS_WANTED - saved;
-            const newLinks = jobLinks.filter((link) => !seenUrls.has(link)).slice(0, remaining);
+            const newLinks = jobLinks
+                .filter((link) => (dedupe ? !seenUrls.has(link) : true))
+                .slice(0, remaining);
             newLinks.forEach((link) => seenUrls.add(link));
 
             if (collectDetails && newLinks.length) {
@@ -342,7 +350,7 @@ async function main() {
                 for (const link of newLinks) {
                     await requestQueue.addRequest({
                         url: link,
-                        userData: { label: 'DETAIL', fromPage: pageNo },
+                        userData: { label: 'DETAIL', fromPage: pageNo, fromPageUrl: request.url },
                     }, { forefront: false });
                 }
                 crawlerLog.info(`➕ Enqueued ${newLinks.length} job details`);
@@ -374,16 +382,17 @@ async function main() {
         // ====================================================================
         async function handleDetailPage(request, page, crawlerLog) {
             if (saved >= RESULTS_WANTED) {
-                crawlerLog.info(`⏭️ Skipping, target reached`);
+                crawlerLog.info(`✅ Skipping, target reached`);
                 return;
             }
 
             // Wait for content to fully load
-            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 12000 }).catch(() => {});
+            await page.waitForSelector('h1', { timeout: 8000 }).catch(() => {});
             
             // Scroll down to trigger lazy-loaded content
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
-            await page.waitForTimeout(300);
+            await page.waitForTimeout(400);
 
             stats.detailPages++;
 
@@ -392,7 +401,7 @@ async function main() {
                 const data = {
                     title: null,
                     company: null,
-                    location_text: null,
+                    location: null,
                     salary: null,
                     date_posted: null,
                     description_html: null,
@@ -409,10 +418,20 @@ async function main() {
                         
                         // Handle @graph structure
                         if (json['@graph']) {
-                            json = json['@graph'].find(item => item['@type'] === 'JobPosting') || json;
+                            const graphHit = json['@graph'].find(item => {
+                                const type = item['@type'];
+                                if (typeof type === 'string') return type.toLowerCase().includes('jobposting');
+                                if (Array.isArray(type)) return type.some(t => String(t).toLowerCase().includes('jobposting'));
+                                return false;
+                            });
+                            if (graphHit) json = graphHit;
                         }
                         
-                        if (json['@type'] === 'JobPosting') {
+                        const type = json['@type'];
+                        const isJob = (typeof type === 'string' && type.toLowerCase().includes('jobposting')) ||
+                                      (Array.isArray(type) && type.some(t => String(t).toLowerCase().includes('jobposting')));
+
+                        if (isJob) {
                             data.title = json.title || json.name;
                             
                             if (json.hiringOrganization) {
@@ -424,7 +443,7 @@ async function main() {
                             if (json.jobLocation) {
                                 const loc = Array.isArray(json.jobLocation) ? json.jobLocation[0] : json.jobLocation;
                                 const addr = loc?.address || {};
-                                data.location_text = [addr.addressLocality, addr.addressRegion].filter(Boolean).join(', ');
+                                data.location = [addr.addressLocality, addr.addressRegion].filter(Boolean).join(', ');
                             }
                             
                             if (json.baseSalary) {
@@ -434,9 +453,9 @@ async function main() {
                                 } else if (bs.value) {
                                     const v = bs.value;
                                     const parts = [];
-                                    if (v.minValue) parts.push(`$${v.minValue.toLocaleString()}`);
-                                    if (v.maxValue) parts.push(`$${v.maxValue.toLocaleString()}`);
-                                    if (v.unitText) parts.push(`per ${v.unitText.toLowerCase()}`);
+                                    if (v.minValue) parts.push(`$${Number(v.minValue).toLocaleString()}`);
+                                    if (v.maxValue) parts.push(`$${Number(v.maxValue).toLocaleString()}`);
+                                    if (v.unitText) parts.push(`per ${String(v.unitText).toLowerCase()}`);
                                     data.salary = parts.join(' - ');
                                 }
                             }
@@ -460,10 +479,10 @@ async function main() {
                     data.company = companyEl?.textContent?.trim();
                 }
                 
-                if (!data.location_text) {
+                if (!data.location) {
                     const links = document.querySelectorAll('h2 a');
                     if (links.length > 1) {
-                        data.location_text = links[1]?.textContent?.trim();
+                        data.location = links[1]?.textContent?.trim();
                     }
                 }
 
@@ -556,11 +575,10 @@ async function main() {
             const item = {
                 site: 'Careerone',
                 keyword: keyword || null,
-                location: location || null,
+                location: clean(jobData.location || location) || null,
                 category: category || null,
                 title: jobData.title,
                 company: jobData.company,
-                location_text: jobData.location_text,
                 salary: jobData.salary,
                 work_type: jobData.work_type,
                 contract_type: jobData.contract_type,
@@ -572,11 +590,17 @@ async function main() {
                 _scraped_at: new Date().toISOString(),
             };
 
+            // Remove empty fields to keep output clean
+            Object.keys(item).forEach((k) => {
+                const v = item[k];
+                if (v === null || v === undefined || v === '') delete item[k];
+            });
+
             await Dataset.pushData(item);
             saved++;
 
             const descLength = item.description_text?.length || 0;
-            crawlerLog.info(`✅ Saved: "${item.title}" at ${item.company} (${saved}/${RESULTS_WANTED}) [desc: ${descLength} chars]`);
+            crawlerLog.info(`💾 Saved: "${item.title}" at ${item.company} (${saved}/${RESULTS_WANTED}) [desc: ${descLength} chars]`);
         }
 
         // ====================================================================
@@ -596,9 +620,9 @@ async function main() {
                             clearInterval(timer);
                             resolve();
                         }
-                    }, 100);
-                    // Max 3 seconds of scrolling
-                    setTimeout(() => { clearInterval(timer); resolve(); }, 3000);
+                    }, 120);
+                    // Max ~3 seconds of scrolling
+                    setTimeout(() => { clearInterval(timer); resolve(); }, 3200);
                 });
             });
             await page.waitForTimeout(500);
@@ -630,14 +654,16 @@ async function main() {
         await crawler.run();
 
         // Final stats
-        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        const durationSeconds = (Date.now() - startTime) / 1000;
+        const duration = durationSeconds.toFixed(2);
         log.info('🏁 Scraping completed!', {
             duration_seconds: duration,
             saved,
             failed,
             list_pages: stats.listPages,
             detail_pages: stats.detailPages,
-            jobs_per_minute: (saved / (parseFloat(duration) / 60)).toFixed(1),
+            jobs_per_minute: (saved / (Math.max(durationSeconds, 1) / 60)).toFixed(1),
+            blocked: stats.blocked,
         });
 
         if (stats.errors.length) {

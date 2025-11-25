@@ -52,7 +52,7 @@
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",
-      "description": "Use Apify Proxy (datacenter recommended for Careerone.com.au).",
+      "description": "Use Apify Proxy (RESIDENTIAL recommended for Careerone.com.au).",
       "editor": "proxy",
       "default": {
         "useApifyProxy": true,

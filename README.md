@@ -4,12 +4,12 @@ Scrape job listings from [Careerone.com.au](https://www.careerone.com.au/), one 
 
 ## Features
 
-- **Flexible search** - Search by keywords, location, or use direct URLs
+- **Flexible search** - Search by keywords, location, or provide direct search URLs
 - **Full job details** - Extract complete job descriptions from detail pages
-- **Pagination support** - Automatically navigate through multiple result pages
-- **Proxy support** - Built-in proxy configuration for reliable scraping
-- **Structured output** - Clean JSON output ready for analysis or integration
-- **Deduplication** - Remove duplicate job listings automatically
+- **Stealth + proxies** - Residential proxy by default, rotating user agents, blocked-resource filtering
+- **Pagination guardrails** - Stops when targets reached, avoids infinite requeues
+- **Structured output** - Clean JSON output with empty fields removed
+- **Deduplication** - Prevent duplicate job listings in the dataset
 
 ## How it works
 
@@ -22,26 +22,27 @@ Scrape job listings from [Careerone.com.au](https://www.careerone.com.au/), one 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `keyword` | String | Job search keyword (e.g., "software engineer", "marketing manager") |
-| `location` | String | Location filter (e.g., "Sydney", "Melbourne VIC") |
-| `startUrl` | String | Direct Careerone search URL (overrides keyword/location) |
-| `results_wanted` | Integer | Maximum number of jobs to collect (default: 100) |
-| `max_pages` | Integer | Maximum search result pages to visit (default: 20) |
-| `collectDetails` | Boolean | Visit detail pages for full descriptions (default: true) |
-| `proxyConfiguration` | Object | Proxy settings for the scraper |
-| `dedupe` | Boolean | Remove duplicate job URLs (default: true) |
+| `keyword` | String | Job search keyword (e.g., "software engineer", "marketing manager"). |
+| `location` | String | Location filter (e.g., "Sydney NSW", "Melbourne VIC"). Empty = AU wide. |
+| `startUrl` | String | Direct Careerone search URL (overrides keyword/location). |
+| `results_wanted` | Integer | Maximum number of jobs to collect (default: 10). |
+| `max_pages` | Integer | Maximum search result pages to visit (default: 5). |
+| `collectDetails` | Boolean | Visit detail pages for full descriptions (default: true). |
+| `proxyConfiguration` | Object | Proxy settings. Residential Apify Proxy recommended (default provided). |
+| `dedupe` | Boolean | Remove duplicate job URLs (default: true). |
 
 ### Example input
 
 ```json
 {
-    "keyword": "software engineer",
-    "location": "Sydney",
-    "results_wanted": 50,
-    "collectDetails": true,
-    "proxyConfiguration": {
-        "useApifyProxy": true
-    }
+  "keyword": "software engineer",
+  "location": "Sydney",
+  "results_wanted": 20,
+  "collectDetails": true,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": ["RESIDENTIAL"]
+  }
 }
 ```
 
@@ -49,13 +50,13 @@ Scrape job listings from [Careerone.com.au](https://www.careerone.com.au/), one 
 
 ```json
 {
-    "startUrl": "https://www.careerone.com.au/jobs/in-melbourne?keywords=data%20analyst",
-    "results_wanted": 100,
-    "collectDetails": true,
-    "proxyConfiguration": {
-        "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
-    }
+  "startUrl": "https://www.careerone.com.au/jobs/in-melbourne?keywords=data%20analyst",
+  "results_wanted": 50,
+  "collectDetails": true,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": ["RESIDENTIAL"]
+  }
 }
 ```
 
@@ -65,35 +66,39 @@ The scraper saves each job as a JSON object with the following fields:
 
 | Field | Description |
 |-------|-------------|
-| `title` | Job position title |
-| `company` | Hiring company name |
-| `location` | Job location |
-| `salary` | Salary information (when available) |
-| `job_type` | Employment type (full-time, part-time, etc.) |
-| `date_posted` | Job posting date |
-| `description_text` | Full job description (plain text) |
-| `description_html` | Full job description (HTML) |
-| `url` | Direct link to the job posting |
-| `site` | Source site name |
-| `keyword` | Search keyword used |
-| `_scraped_at` | Timestamp of when the job was scraped |
+| `site` | Source site name (`Careerone`). |
+| `keyword` | Search keyword used (if provided). |
+| `category` | Category filter (if provided). |
+| `location` | Job location (city/region when available). |
+| `title` | Job position title. |
+| `company` | Hiring company name. |
+| `salary` | Salary information (when available). |
+| `work_type` | Employment type (full-time, part-time, etc.). |
+| `contract_type` | Contract type when stated. |
+| `date_posted` | Job posting date/relative text. |
+| `description_text` | Full job description (plain text). |
+| `description_html` | Full job description (HTML). |
+| `url` | Direct link to the job posting. |
+| `_source` | Raw source domain. |
+| `_scraped_at` | ISO timestamp of when the job was scraped. |
 
 ### Example output
 
 ```json
 {
-    "title": "Senior Software Engineer",
-    "company": "TechCorp Australia",
-    "location": "Sydney NSW",
-    "salary": "$120,000 - $150,000 per annum",
-    "job_type": "Full Time",
-    "date_posted": "2025-01-15",
-    "description_text": "We are looking for an experienced software engineer to join our team...",
-    "description_html": "<div>We are looking for an experienced software engineer...</div>",
-    "url": "https://www.careerone.com.au/jobview/senior-software-engineer/abc123",
-    "site": "Careerone",
-    "keyword": "software engineer",
-    "_scraped_at": "2025-01-20T10:30:00.000Z"
+  "site": "Careerone",
+  "keyword": "software engineer",
+  "location": "Sydney NSW",
+  "title": "Senior Software Engineer",
+  "company": "TechCorp Australia",
+  "salary": "$120,000 - $150,000 per annum",
+  "work_type": "Full Time",
+  "date_posted": "2025-01-15",
+  "description_text": "We are looking for an experienced software engineer to join our team...",
+  "description_html": "<div>We are looking for an experienced software engineer...</div>",
+  "url": "https://www.careerone.com.au/jobview/senior-software-engineer/abc123",
+  "_source": "careerone.com.au",
+  "_scraped_at": "2025-01-20T10:30:00.000Z"
 }
 ```
 

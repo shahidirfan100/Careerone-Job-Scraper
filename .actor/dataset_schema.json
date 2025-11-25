@@ -10,7 +10,8 @@
           "company",
           "location",
           "salary",
-          "job_type",
+          "work_type",
+          "contract_type",
           "date_posted",
           "url"
         ]
@@ -34,8 +35,12 @@
             "label": "Salary",
             "format": "text"
           },
-          "job_type": {
-            "label": "Job Type",
+          "work_type": {
+            "label": "Work Type",
+            "format": "text"
+          },
+          "contract_type": {
+            "label": "Contract",
             "format": "text"
           },
           "date_posted": {
