@@ -121,21 +121,21 @@ async function main() {
             // Session pool for stealth
             useSessionPool: true,
             sessionPoolOptions: {
-                maxPoolSize: 30,
-                sessionOptions: { maxUsageCount: 40 },
+                maxPoolSize: 40,
+                sessionOptions: { maxUsageCount: 30 },
             },
             persistCookiesPerSession: true,
 
             // Faster throughput
-            minConcurrency: 4,
+            minConcurrency: 6,
             maxConcurrency: 12,
             
             // Retry settings
-            maxRequestRetries: 3,
+            maxRequestRetries: 2,
             
             // Timeouts tuned for slower pages
-            navigationTimeoutSecs: 35,
-            requestHandlerTimeoutSecs: 70,
+            navigationTimeoutSecs: 25,
+            requestHandlerTimeoutSecs: 60,
 
             // Browser launch - optimized for Apify
             launchContext: {
@@ -158,11 +158,11 @@ async function main() {
 
             // Autoscaling for high throughput
             autoscaledPoolOptions: {
-                desiredConcurrency: 8,
-                minConcurrency: 4,
-                maxConcurrency: 12,
-                scaleUpStepRatio: 0.3,
-                scaleDownStepRatio: 0.15,
+                desiredConcurrency: 10,
+                minConcurrency: 6,
+                maxConcurrency: 14,
+                scaleUpStepRatio: 0.4,
+                scaleDownStepRatio: 0.2,
             },
 
             // Pre-navigation hooks for stealth
@@ -209,6 +209,15 @@ async function main() {
                             route.continue();
                         }
                     });
+
+                    // Capture first document response status to detect 403 early
+                    const statusWatcher = (response) => {
+                        if (response.request().resourceType() === 'document') {
+                            request.userData.__status = response.status();
+                            page.off('response', statusWatcher);
+                        }
+                    };
+                    page.on('response', statusWatcher);
 
                     // Stealth scripts
                     await page.addInitScript(() => {
@@ -259,7 +268,7 @@ async function main() {
             postNavigationHooks: [
                 async ({ page, session }) => {
                     // Small delay after navigation for JS to execute
-                    await page.waitForTimeout(250 + Math.random() * 200);
+                    await page.waitForTimeout(150 + Math.random() * 150);
 
                     // If page clearly blocked, retire session early
                     const title = await page.title().catch(() => '');
@@ -277,7 +286,8 @@ async function main() {
                 // Check for blocks
                 const url = page.url();
                 const pageTitle = await page.title().catch(() => '');
-                if (url.includes('blocked') || url.includes('captcha') || url.includes('challenge') || pageTitle.toLowerCase().includes('access denied')) {
+                const status = request.userData?.__status;
+                if (status === 403 || url.includes('blocked') || url.includes('captcha') || url.includes('challenge') || pageTitle.toLowerCase().includes('access denied')) {
                     stats.blocked++;
                     session?.retire();
                     throw new Error('Blocked or captcha detected');
@@ -310,8 +320,8 @@ async function main() {
             }
 
             // Wait for content
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
-                    await page.waitForSelector('a[href*="/jobview/"]', { timeout: 4000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 6000 }).catch(() => {});
+            await page.waitForSelector('a[href*="/jobview/"]', { timeout: 3000 }).catch(() => {});
             
             // Scroll to load more jobs (lazy loading)
             await autoScroll(page);
@@ -387,12 +397,12 @@ async function main() {
             }
 
             // Wait for content to fully load
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
-            await page.waitForSelector('h1', { timeout: 5000 }).catch(() => {});
+            await page.waitForLoadState('domcontentloaded', { timeout: 6000 }).catch(() => {});
+            await page.waitForSelector('h1', { timeout: 3000 }).catch(() => {});
             
             // Scroll down to trigger lazy-loaded content
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
-            await page.waitForTimeout(200);
+            await page.waitForTimeout(150);
 
             stats.detailPages++;
 
@@ -612,7 +622,7 @@ async function main() {
             await page.evaluate(async () => {
                 await new Promise((resolve) => {
                     let totalHeight = 0;
-                    const distance = 700;
+                    const distance = 1000;
                     const timer = setInterval(() => {
                         window.scrollBy(0, distance);
                         totalHeight += distance;
@@ -620,12 +630,12 @@ async function main() {
                             clearInterval(timer);
                             resolve();
                         }
-                    }, 100);
-                    // Max ~2 seconds of scrolling
-                    setTimeout(() => { clearInterval(timer); resolve(); }, 2000);
+                    }, 80);
+                    // Max ~1.6 seconds of scrolling
+                    setTimeout(() => { clearInterval(timer); resolve(); }, 1600);
                 });
             });
-            await page.waitForTimeout(200);
+            await page.waitForTimeout(120);
         }
 
         // Build next page URL
