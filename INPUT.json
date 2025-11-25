@@ -2,8 +2,11 @@
   "keyword": "software engineer",
   "location": "Sydney",
   "results_wanted": 10,
-  "max_pages": 3,
+  "max_pages": 5,
   "collectDetails": true,
-  "debugMode": true,
-  "blockResources": true
+  "dedupe": true,
+  "proxyConfiguration": {
+    "useApifyProxy": true,
+    "apifyProxyGroups": ["RESIDENTIAL"]
+  }
 }

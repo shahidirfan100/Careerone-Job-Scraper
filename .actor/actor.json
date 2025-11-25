@@ -1,14 +1,18 @@
 {
-  "actorSpecification": 1,
-  "name": "careerone-jobs-scraper",
-  "version": "1.0.0",
-  "buildTag": "latest",
-  "dockerfile": "./Dockerfile",
-  "readme": "../README.md",
-  "input": "./input_schema.json",
-  "output": "./output_schema.json",
-  "nodeJsVersion": "22",
-  "storages": {
-    "dataset": "./dataset_schema.json"
-  }
+    "actorSpecification": 1,
+    "name": "careerone-jobs-scraper",
+    "title": "Careerone Jobs Scraper",
+    "description": "Scrape job listings from Careerone.com.au, Australia's largest job board. Extract job titles, companies, locations, salaries, and full descriptions.",
+    "version": "1.0.0",
+    "buildTag": "latest",
+    "dockerfile": "./Dockerfile",
+    "readme": "../README.md",
+    "input": "./input_schema.json",
+    "output": "./output_schema.json",
+    "nodeJsVersion": "22",
+    "storages": {
+        "dataset": "./dataset_schema.json"
+    },
+    "minMemoryMbytes": 4096,
+    "maxMemoryMbytes": 16384
 }
