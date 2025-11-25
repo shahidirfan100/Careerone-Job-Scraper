@@ -1,6 +1,9 @@
 {
   "keyword": "software engineer",
-  "location": "Sydney NSW",
+  "location": "Sydney",
   "results_wanted": 10,
-  "max_pages": 3
+  "max_pages": 3,
+  "collectDetails": true,
+  "debugMode": true,
+  "blockResources": true
 }
